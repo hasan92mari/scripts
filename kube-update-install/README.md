@@ -5,24 +5,56 @@ This repository contains two Bash scripts for setting up and maintaining a kubea
 - `kubernetes.sh` — installs and upgrades Kubernetes components.
 - `cilium.sh` — installs Cilium as the cluster CNI.
 
-The scripts are designed to keep Kubernetes installation/upgrade and CNI installation as separate steps.
+The scripts keep Kubernetes lifecycle, CNI installation, and node scheduling operations as separate responsibilities.
 
 ---
 
-## Requirements
+## Prerequisites
 
-Before using the scripts, make sure you have:
+Before running the scripts, make sure the following requirements are met.
+
+### Operating System
 
 - Ubuntu 22.04 or newer
-- A supported CPU architecture
-- A configured container runtime such as:
-  - containerd
-  - CRI-O
-  - Docker via `cri-dockerd`
+- Supported CPU architecture
 - Root or `sudo` access
-- Network access to the Kubernetes APT repository and Helm repository
+- Internet access
 
-The container runtime must already be installed and configured before running `kubernetes.sh`.
+### Container Runtime
+
+A supported CRI-compatible container runtime must already be installed and configured.
+
+Supported runtimes:
+
+- containerd
+- CRI-O
+- Docker via `cri-dockerd`
+
+The runtime must be running before executing `kubernetes.sh`.
+
+### Helm
+
+**Helm must be installed before running `cilium.sh`.**
+
+Check whether Helm is installed:
+
+```bash
+helm version
+```
+
+If Helm is not installed, install it before running the Cilium script.
+
+The Cilium script uses Helm to install the Cilium Helm chart.
+
+### kubectl
+
+`kubectl` must also be available on the primary control-plane node before running `cilium.sh`.
+
+Check:
+
+```bash
+kubectl version --client
+```
 
 ---
 
@@ -52,7 +84,15 @@ The script does **not** install a CNI.
 
 # 2. Install Cilium
 
-After the primary control plane has been created, run:
+After the primary control plane has been created, make sure Helm is installed.
+
+Check:
+
+```bash
+helm version
+```
+
+Then run:
 
 ```bash
 sudo ./cilium.sh
@@ -61,10 +101,11 @@ sudo ./cilium.sh
 The Cilium script will:
 
 1. Verify that Kubernetes is initialized.
-2. Configure the Cilium Helm repository.
-3. Install Cilium into the `kube-system` namespace.
-4. Wait for the Cilium DaemonSet to become ready.
-5. Display the Cilium pods and Kubernetes nodes.
+2. Verify that `kubectl` and `helm` are available.
+3. Configure the Cilium Helm repository.
+4. Install Cilium into the `kube-system` namespace.
+5. Wait for the Cilium DaemonSet to become ready.
+6. Display the Cilium pods and Kubernetes nodes.
 
 Verify the cluster:
 
@@ -72,7 +113,7 @@ Verify the cluster:
 kubectl get nodes
 ```
 
-And check Cilium:
+Check Cilium:
 
 ```bash
 kubectl get pods -n kube-system -l k8s-app=cilium
@@ -90,7 +131,7 @@ kubeadm token create --print-join-command
 
 Copy the complete command.
 
-Then run it on the worker node.
+Then execute it on the worker node.
 
 Example:
 
@@ -124,7 +165,7 @@ Then generate the normal join command:
 kubeadm token create --print-join-command
 ```
 
-Append these options to the join command:
+Append:
 
 ```text
 --control-plane --certificate-key <CERTIFICATE_KEY>
@@ -172,7 +213,93 @@ For an additional control plane:
 sudo ./kubernetes.sh update 1.37.1 additional-control-plane
 ```
 
-The script:
+## IMPORTANT: Drain the Node Before an Upgrade
+
+**The node must be drained before running the update script.**
+
+The update script intentionally does **not** perform `kubectl drain` automatically.
+
+This means the administrator is responsible for preparing the node before the upgrade.
+
+### Worker
+
+From a control-plane node:
+
+```bash
+kubectl drain <node-name> \
+    --ignore-daemonsets \
+    --delete-emptydir-data
+```
+
+Then, on the worker node, run:
+
+```bash
+sudo ./kubernetes.sh update 1.37.1 worker
+```
+
+After the upgrade completes and the node is confirmed healthy, uncordon it from a control-plane node:
+
+```bash
+kubectl uncordon <node-name>
+```
+
+### Additional Control Plane
+
+Before updating an additional control-plane node, drain it from another control-plane node:
+
+```bash
+kubectl drain <node-name> \
+    --ignore-daemonsets \
+    --delete-emptydir-data
+```
+
+Then run the update on the node:
+
+```bash
+sudo ./kubernetes.sh update 1.37.1 additional-control-plane
+```
+
+After verifying that the node is healthy:
+
+```bash
+kubectl uncordon <node-name>
+```
+
+### Primary Control Plane
+
+Before updating the primary control-plane node, make sure the cluster can continue operating with the other control-plane nodes.
+
+Drain the node from another control-plane node when appropriate:
+
+```bash
+kubectl drain <node-name> \
+    --ignore-daemonsets \
+    --delete-emptydir-data
+```
+
+Then run:
+
+```bash
+sudo ./kubernetes.sh update 1.37.1 control-plane
+```
+
+After verifying that the node is healthy:
+
+```bash
+kubectl uncordon <node-name>
+```
+
+Finally:
+
+```bash
+kubectl get nodes
+```
+
+---
+
+# 6. What the Update Script Does
+
+The update script:
 
 1. Updates `kubeadm`.
 2. Runs the appropriate `kubeadm upgrade` command.
@@ -182,49 +309,28 @@ The script:
 6. Restarts kubelet.
 7. Verifies the installed versions.
 
----
+The script does **not**:
 
-## Node Drain During Upgrades
+- Drain nodes.
+- Uncordon nodes.
+- Install or upgrade Cilium.
+- Perform cluster scheduling operations.
 
-The script intentionally does **not** automatically drain or uncordon nodes.
-
-Before upgrading a node, drain it manually from a control-plane node when required.
-
-For example:
-
-```bash
-kubectl drain <node-name> \
-    --ignore-daemonsets \
-    --delete-emptydir-data
-```
-
-After the upgrade has completed and the node is healthy:
-
-```bash
-kubectl uncordon <node-name>
-```
-
-Then verify:
-
-```bash
-kubectl get nodes
-```
-
-This approach keeps cluster scheduling operations separate from the package and Kubernetes upgrade script.
+Node draining and uncordoning must be handled manually.
 
 ---
 
-# 6. Kubernetes Version Rules
+# 7. Kubernetes Version Rules
 
 The Kubernetes version must be provided in exact `x.y.z` format.
 
-Valid example:
+Valid:
 
 ```text
 1.37.0
 ```
 
-Invalid examples:
+Invalid:
 
 ```text
 v1.37.0
@@ -235,7 +341,7 @@ latest
 For upgrades, the script:
 
 - Does not allow downgrades.
-- Does not run an update if the requested version is already installed.
+- Does not update to the same version.
 - Does not skip Kubernetes minor versions.
 
 For example:
@@ -254,11 +360,11 @@ But:
 
 is rejected.
 
-Minor versions must be upgraded sequentially according to the Kubernetes upgrade process.
+Minor versions must be upgraded sequentially.
 
 ---
 
-# 7. Package Holds
+# 8. Package Holds
 
 After installation or upgrade, the following packages are held:
 
@@ -272,7 +378,7 @@ This prevents them from being upgraded unintentionally by normal APT operations.
 
 The script automatically removes the holds before changing package versions and restores them afterward.
 
-Check the holds with:
+Check the holds:
 
 ```bash
 apt-mark showhold
@@ -280,7 +386,7 @@ apt-mark showhold
 
 ---
 
-# 8. Useful Commands
+# 9. Useful Commands
 
 Check Kubernetes nodes:
 
@@ -329,22 +435,30 @@ kubeadm token create --print-join-command
 | `kubernetes.sh` | Install and upgrade Kubernetes |
 | `cilium.sh` | Install Cilium CNI |
 
-The general setup order is:
+General setup order:
 
 ```text
-1. Install/configure container runtime
-           ↓
-2. Create primary control plane
-           ↓
-3. Install Cilium
-           ↓
-4. Add additional control planes / workers
-           ↓
-5. Manage upgrades with kubernetes.sh
+1. Install and configure container runtime
+                 ↓
+2. Install Helm
+                 ↓
+3. Create primary control plane
+                 ↓
+4. Install Cilium
+                 ↓
+5. Add additional control planes / workers
+                 ↓
+6. Drain node before every upgrade
+                 ↓
+7. Upgrade Kubernetes
+                 ↓
+8. Verify node health
+                 ↓
+9. Uncordon node
 ```
 
 The scripts intentionally keep these responsibilities separate:
 
 - Kubernetes lifecycle → `kubernetes.sh`
 - CNI lifecycle → `cilium.sh`
-- Node scheduling operations (`drain` / `uncordon`) → administrator
+- Node scheduling (`drain` / `uncordon`) → administrator
