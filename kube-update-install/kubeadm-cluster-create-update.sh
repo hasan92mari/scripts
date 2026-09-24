@@ -129,7 +129,6 @@ case "$NODE_TYPE" in
 esac
 
 K8S_MINOR_VERSION="$(echo "$K8S_VERSION" | cut -d. -f1,2)"
-K8S_MAJOR_VERSION="$(echo "$K8S_VERSION" | cut -d. -f1)"
 
 REPO_URL="https://pkgs.k8s.io/core:/stable:/v${K8S_MINOR_VERSION}/deb"
 
@@ -277,14 +276,19 @@ configure_kubernetes_repository
 
 get_package_version() {
     local package="$1"
+    local version
 
-    apt-cache madison "$package" \
+    version="$(
+        apt-cache madison "$package" 2>/dev/null \
         | awk -v prefix="${K8S_VERSION}-" '
             $3 ~ "^" prefix {
                 print $3
                 exit
             }
-        '
+        ' || true
+    )"
+
+    echo "$version"
 }
 
 KUBEADM_PACKAGE_VERSION="$(get_package_version kubeadm)"
