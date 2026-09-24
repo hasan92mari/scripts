@@ -213,6 +213,39 @@ For an additional control plane:
 sudo ./kubernetes.sh update 1.37.1 additional-control-plane
 ```
 
+## Running the Update Remotely
+
+The update script can also be executed remotely over SSH without first copying the script to the target node.
+
+For example, from the machine where `kubeadm-cluster-create-update.sh` is located:
+
+```bash
+ssh worker-node-3-a 'sudo bash -s' < kubeadm-cluster-create-update.sh update 1.37.1 worker
+```
+
+The command:
+
+1. Connects to `worker-node-3-a` over SSH.
+2. Sends the local script through standard input.
+3. Executes it remotely with `sudo bash`.
+4. Passes `update`, `1.37.1`, and `worker` as the script arguments.
+
+The script therefore does not need to have the executable bit set on the remote node.
+
+The same method can be used for other node types:
+
+```bash
+ssh control-plane-2 'sudo bash -s' < kubeadm-cluster-create-update.sh update 1.37.1 additional-control-plane
+```
+
+```bash
+ssh control-plane-1 'sudo bash -s' < kubeadm-cluster-create-update.sh update 1.37.1 control-plane
+```
+
+> **Note:** The target node must still satisfy all prerequisites described above, including Ubuntu, a supported container runtime, network access, and the required Kubernetes APT repository access.
+
+---
+
 ## IMPORTANT: Drain the Node Before an Upgrade
 
 **The node must be drained before running the update script.**
@@ -235,6 +268,12 @@ Then, on the worker node, run:
 
 ```bash
 sudo ./kubernetes.sh update 1.37.1 worker
+```
+
+Or execute the update remotely:
+
+```bash
+ssh worker-node-3-a 'sudo bash -s' < kubeadm-cluster-create-update.sh update 1.37.1 worker
 ```
 
 After the upgrade completes and the node is confirmed healthy, uncordon it from a control-plane node:
