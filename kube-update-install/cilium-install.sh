@@ -6,7 +6,7 @@ set -euo pipefail
 # Cilium installation script
 #
 # Usage:
-#   sudo ./cilium.sh
+#   sudo ./cilium-install.sh
 #
 # IMPORTANT:
 #   - Run this script on the primary Kubernetes control-plane.

@@ -1,28 +1,116 @@
 # Kubernetes Cluster Setup Scripts
 
-This repository contains two Bash scripts for setting up and maintaining a kubeadm-based Kubernetes cluster:
+Bash scripts for creating and maintaining a **kubeadm-based Kubernetes cluster**.
 
-- `kubernetes.sh` — installs and upgrades Kubernetes components.
+The repository contains:
+
+- `kubernetes.sh` — installs and upgrades Kubernetes.
 - `cilium.sh` — installs Cilium as the cluster CNI.
 
-The scripts keep Kubernetes lifecycle, CNI installation, and node scheduling operations as separate responsibilities.
+The scripts keep **Kubernetes lifecycle**, **CNI lifecycle**, and **node scheduling** separate.
 
 ---
 
-## Prerequisites
+# Quick Start
 
-Before running the scripts, make sure the following requirements are met.
+## 1. Create the Primary Control Plane
 
-### Operating System
+```bash
+sudo ./kubernetes.sh \
+    -a create \
+    -t 1.37.0 \
+    -n control-plane
+```
+
+## 2. Install Cilium
+
+```bash
+sudo ./cilium.sh
+```
+
+## 3. Add Workers
+
+Generate the join command on a control-plane node:
+
+```bash
+kubeadm token create --print-join-command
+```
+
+Run the generated command on the worker.
+
+## 4. Add Additional Control Planes
+
+Generate the certificate key:
+
+```bash
+kubeadm init phase upload-certs --upload-certs
+```
+
+Then generate the join command:
+
+```bash
+kubeadm token create --print-join-command
+```
+
+Append:
+
+```text
+--control-plane --certificate-key <CERTIFICATE_KEY>
+```
+
+Run the resulting `kubeadm join` command on the additional control-plane node.
+
+## 5. Upgrade Kubernetes
+
+First drain the node from a control-plane node:
+
+```bash
+kubectl drain <node-name> \
+    --ignore-daemonsets \
+    --delete-emptydir-data
+```
+
+Then run the update:
+
+```bash
+sudo ./kubernetes.sh \
+    -a update \
+    -t 1.37.1 \
+    -n worker
+```
+
+After verifying the node:
+
+```bash
+kubectl uncordon <node-name>
+```
+
+## 6. Remote Upgrade over SSH
+
+The script can also be sent directly to a remote node without copying it first:
+
+```bash
+ssh worker-node-3-a \
+    'sudo bash -s -a update -t 1.37.1 -n worker' \
+    < kubeadm-cluster-create-update.sh
+```
+
+---
+
+# 1. Prerequisites
+
+Before using the scripts, make sure the following requirements are met.
+
+## Operating System
 
 - Ubuntu 22.04 or newer
 - Supported CPU architecture
 - Root or `sudo` access
 - Internet access
 
-### Container Runtime
+## Container Runtime
 
-A supported CRI-compatible container runtime must already be installed and configured.
+A supported CRI-compatible runtime must already be installed and configured.
 
 Supported runtimes:
 
@@ -32,23 +120,21 @@ Supported runtimes:
 
 The runtime must be running before executing `kubernetes.sh`.
 
-### Helm
+## Helm
 
-**Helm must be installed before running `cilium.sh`.**
+Helm must be installed before running `cilium.sh`.
 
-Check whether Helm is installed:
+Check:
 
 ```bash
 helm version
 ```
 
-If Helm is not installed, install it before running the Cilium script.
-
 The Cilium script uses Helm to install the Cilium Helm chart.
 
-### kubectl
+## kubectl
 
-`kubectl` must also be available on the primary control-plane node before running `cilium.sh`.
+`kubectl` must be available on the primary control-plane node before running `cilium.sh`.
 
 Check:
 
@@ -58,35 +144,115 @@ kubectl version --client
 
 ---
 
-# 1. Create the Primary Control Plane
+# 2. Kubernetes Script
+
+## Usage
+
+The script uses command-line flags:
+
+```text
+-a    Action
+-t    Target Kubernetes version
+-n    Node type
+-p    Optional kubeadm patches directory
+-h    Help
+```
+
+General syntax:
+
+```bash
+sudo ./kubernetes.sh \
+    -a <create|update> \
+    -t <x.y.z> \
+    -n <node-type> \
+    [-p <patches-directory>]
+```
+
+### Actions
+
+Supported actions:
+
+```text
+create
+update
+```
+
+### Node Types
+
+Supported node types:
+
+```text
+control-plane
+additional-control-plane
+worker
+```
+
+### Target Version
+
+The target version must use the exact `x.y.z` format.
+
+Example:
+
+```text
+1.37.1
+```
+
+Do not use:
+
+```text
+v1.37.1
+1.37
+latest
+```
+
+### Patches
+
+The optional `-p` flag specifies a kubeadm patches directory.
+
+Example:
+
+```bash
+-p /etc/kubernetes/patches
+```
+
+When provided, the directory is passed to the relevant `kubeadm upgrade` command.
+
+---
+
+# 3. Create the Primary Control Plane
 
 Run:
 
 ```bash
-sudo ./kubernetes.sh create 1.37.0 control-plane
+sudo ./kubernetes.sh \
+    -a create \
+    -t 1.37.0 \
+    -n control-plane
 ```
 
-The script will:
+The script:
 
-1. Validate the operating system and architecture.
-2. Check the container runtime.
-3. Configure the Kubernetes APT repository.
-4. Install the requested versions of:
+1. Validates Ubuntu.
+2. Validates the CPU architecture.
+3. Checks the container runtime.
+4. Configures the Kubernetes APT repository.
+5. Checks that the requested Kubernetes package versions exist.
+6. Installs:
    - `kubeadm`
    - `kubelet`
    - `kubectl`
-5. Hold the installed Kubernetes packages.
-6. Initialize the Kubernetes control plane with `kubeadm init`.
+7. Holds the installed packages.
+8. Runs `kubeadm init`.
 
-The script does **not** install a CNI.
+The script intentionally does **not** install a CNI.
+
+Cilium is installed separately using `cilium.sh`.
 
 ---
 
-# 2. Install Cilium
+# 4. Install Cilium
 
-After the primary control plane has been created, make sure Helm is installed.
-
-Check:
+After creating the primary control plane, make sure Helm is installed:
 
 ```bash
 helm version
@@ -98,14 +264,14 @@ Then run:
 sudo ./cilium.sh
 ```
 
-The Cilium script will:
+The Cilium script:
 
-1. Verify that Kubernetes is initialized.
-2. Verify that `kubectl` and `helm` are available.
-3. Configure the Cilium Helm repository.
-4. Install Cilium into the `kube-system` namespace.
-5. Wait for the Cilium DaemonSet to become ready.
-6. Display the Cilium pods and Kubernetes nodes.
+1. Verifies that Kubernetes is initialized.
+2. Verifies `kubectl` and Helm.
+3. Configures the Cilium Helm repository.
+4. Installs Cilium into `kube-system`.
+5. Waits for the Cilium DaemonSet.
+6. Displays Cilium pods and Kubernetes nodes.
 
 Verify the cluster:
 
@@ -116,24 +282,22 @@ kubectl get nodes
 Check Cilium:
 
 ```bash
-kubectl get pods -n kube-system -l k8s-app=cilium
+kubectl get pods \
+    -n kube-system \
+    -l k8s-app=cilium
 ```
 
 ---
 
-# 3. Add a Worker Node
+# 5. Add a Worker Node
 
-On the primary control plane, generate a worker join command:
+On an existing control-plane node:
 
 ```bash
 kubeadm token create --print-join-command
 ```
 
-Copy the complete command.
-
-Then execute it on the worker node.
-
-Example:
+The command will look similar to:
 
 ```bash
 kubeadm join <CONTROL_PLANE_ENDPOINT>:6443 \
@@ -141,7 +305,9 @@ kubeadm join <CONTROL_PLANE_ENDPOINT>:6443 \
     --discovery-token-ca-cert-hash sha256:<HASH>
 ```
 
-After the worker joins, verify it from the control plane:
+Run the complete command on the worker.
+
+Then verify:
 
 ```bash
 kubectl get nodes
@@ -149,7 +315,7 @@ kubectl get nodes
 
 ---
 
-# 4. Add an Additional Control Plane
+# 6. Add an Additional Control Plane
 
 On an existing control-plane node, generate the certificate key:
 
@@ -157,7 +323,7 @@ On an existing control-plane node, generate the certificate key:
 kubeadm init phase upload-certs --upload-certs
 ```
 
-Save the certificate key printed by the command.
+Save the certificate key.
 
 Then generate the normal join command:
 
@@ -183,7 +349,7 @@ kubeadm join <CONTROL_PLANE_ENDPOINT>:6443 \
 
 Run the complete command on the additional control-plane node.
 
-Then verify:
+Verify:
 
 ```bash
 kubectl get nodes
@@ -191,70 +357,124 @@ kubectl get nodes
 
 ---
 
-# 5. Upgrade Kubernetes
+# 7. Upgrade Kubernetes
 
-The script supports Kubernetes upgrades using the `update` action.
+The `update` action upgrades an existing Kubernetes installation.
 
-For example, to upgrade from `1.37.0` to `1.37.1`:
-
-```bash
-sudo ./kubernetes.sh update 1.37.1 worker
-```
-
-For a primary control plane:
+For example:
 
 ```bash
-sudo ./kubernetes.sh update 1.37.1 control-plane
+sudo ./kubernetes.sh \
+    -a update \
+    -t 1.37.1 \
+    -n worker
 ```
 
-For an additional control plane:
+Primary control plane:
 
 ```bash
-sudo ./kubernetes.sh update 1.37.1 additional-control-plane
+sudo ./kubernetes.sh \
+    -a update \
+    -t 1.37.1 \
+    -n control-plane
 ```
 
-## Running the Update Remotely
-
-The update script can also be executed remotely over SSH without first copying the script to the target node.
-
-For example, from the machine where `kubeadm-cluster-create-update.sh` is located:
+Additional control plane:
 
 ```bash
-ssh worker-node-3-a 'sudo bash -s' < kubeadm-cluster-create-update.sh update 1.37.1 worker
+sudo ./kubernetes.sh \
+    -a update \
+    -t 1.37.1 \
+    -n additional-control-plane
 ```
-
-The command:
-
-1. Connects to `worker-node-3-a` over SSH.
-2. Sends the local script through standard input.
-3. Executes it remotely with `sudo bash`.
-4. Passes `update`, `1.37.1`, and `worker` as the script arguments.
-
-The script therefore does not need to have the executable bit set on the remote node.
-
-The same method can be used for other node types:
-
-```bash
-ssh control-plane-2 'sudo bash -s' < kubeadm-cluster-create-update.sh update 1.37.1 additional-control-plane
-```
-
-```bash
-ssh control-plane-1 'sudo bash -s' < kubeadm-cluster-create-update.sh update 1.37.1 control-plane
-```
-
-> **Note:** The target node must still satisfy all prerequisites described above, including Ubuntu, a supported container runtime, network access, and the required Kubernetes APT repository access.
 
 ---
 
-## IMPORTANT: Drain the Node Before an Upgrade
+# 8. Kubernetes Manifest Backup
 
-**The node must be drained before running the update script.**
+Before every `update`, the script automatically creates a backup of:
 
-The update script intentionally does **not** perform `kubectl drain` automatically.
+```text
+/etc/kubernetes/manifests
+```
 
-This means the administrator is responsible for preparing the node before the upgrade.
+The backup is stored under the home directory of the user who invoked `sudo`:
 
-### Worker
+```text
+~/backup/kubernetes-manifests/
+```
+
+Each update receives its own timestamped directory.
+
+Example:
+
+```text
+~/backup/kubernetes-manifests/
+└── 2026-09-25_00-15-30/
+    └── manifests/
+        ├── etcd.yaml
+        ├── kube-apiserver.yaml
+        ├── kube-controller-manager.yaml
+        └── kube-scheduler.yaml
+```
+
+This provides a snapshot of the static pod manifests **before the Kubernetes upgrade**.
+
+The backup does not automatically restore the manifests after the upgrade.
+
+---
+
+# 9. kubeadm Patches
+
+If the cluster contains custom control-plane configuration, kubeadm patches can be provided with `-p`.
+
+Example:
+
+```bash
+sudo ./kubernetes.sh \
+    -a update \
+    -t 1.37.1 \
+    -n control-plane \
+    -p /etc/kubernetes/patches
+```
+
+The directory is passed to:
+
+```bash
+kubeadm upgrade apply
+```
+
+or:
+
+```bash
+kubeadm upgrade node
+```
+
+depending on the node type.
+
+This allows kubeadm to apply the defined customizations while generating the updated static pod manifests.
+
+The script does **not** automatically generate patches from the existing manifests.
+
+For a cluster using custom settings such as:
+
+- API server audit configuration
+- Encryption configuration
+- Custom API server arguments
+- Custom volume mounts
+- Other kubeadm-supported control-plane customizations
+
+the appropriate patches should be maintained in a patch directory and supplied using `-p`.
+
+---
+
+# 10. Drain Before Every Upgrade
+
+The script intentionally does **not** run `kubectl drain` or `kubectl uncordon`.
+
+The administrator must handle node scheduling manually.
+
+## Worker
 
 From a control-plane node:
 
@@ -264,27 +484,34 @@ kubectl drain <node-name> \
     --delete-emptydir-data
 ```
 
-Then, on the worker node, run:
+Then update the worker:
 
 ```bash
-sudo ./kubernetes.sh update 1.37.1 worker
+sudo ./kubernetes.sh \
+    -a update \
+    -t 1.37.1 \
+    -n worker
 ```
 
-Or execute the update remotely:
+Or remotely:
 
 ```bash
-ssh worker-node-3-a 'sudo bash -s' < kubeadm-cluster-create-update.sh update 1.37.1 worker
+ssh worker-node-3-a \
+    'sudo bash -s -a update -t 1.37.1 -n worker' \
+    < kubeadm-cluster-create-update.sh
 ```
 
-After the upgrade completes and the node is confirmed healthy, uncordon it from a control-plane node:
+After verifying the node:
 
 ```bash
 kubectl uncordon <node-name>
 ```
 
-### Additional Control Plane
+---
 
-Before updating an additional control-plane node, drain it from another control-plane node:
+## Additional Control Plane
+
+Drain the node from another control-plane node:
 
 ```bash
 kubectl drain <node-name> \
@@ -292,21 +519,26 @@ kubectl drain <node-name> \
     --delete-emptydir-data
 ```
 
-Then run the update on the node:
+Then update:
 
 ```bash
-sudo ./kubernetes.sh update 1.37.1 additional-control-plane
+sudo ./kubernetes.sh \
+    -a update \
+    -t 1.37.1 \
+    -n additional-control-plane
 ```
 
-After verifying that the node is healthy:
+After verifying the node:
 
 ```bash
 kubectl uncordon <node-name>
 ```
 
-### Primary Control Plane
+---
 
-Before updating the primary control-plane node, make sure the cluster can continue operating with the other control-plane nodes.
+## Primary Control Plane
+
+Before updating the primary control plane, make sure the cluster can continue operating with the remaining control-plane nodes.
 
 Drain the node from another control-plane node when appropriate:
 
@@ -316,13 +548,16 @@ kubectl drain <node-name> \
     --delete-emptydir-data
 ```
 
-Then run:
+Then update:
 
 ```bash
-sudo ./kubernetes.sh update 1.37.1 control-plane
+sudo ./kubernetes.sh \
+    -a update \
+    -t 1.37.1 \
+    -n control-plane
 ```
 
-After verifying that the node is healthy:
+After verifying the node:
 
 ```bash
 kubectl uncordon <node-name>
@@ -336,37 +571,116 @@ kubectl get nodes
 
 ---
 
-# 6. What the Update Script Does
+# 11. Remote Execution
 
-The update script:
+The Kubernetes script can be executed over SSH without copying it to the target node.
 
-1. Updates `kubeadm`.
-2. Runs the appropriate `kubeadm upgrade` command.
-3. Updates `kubelet`.
-4. Updates `kubectl`.
-5. Reloads systemd.
-6. Restarts kubelet.
-7. Verifies the installed versions.
+Example:
 
-The script does **not**:
+```bash
+ssh worker-node-3-a \
+    'sudo bash -s -a update -t 1.37.1 -n worker' \
+    < kubeadm-cluster-create-update.sh
+```
 
-- Drain nodes.
-- Uncordon nodes.
-- Install or upgrade Cilium.
-- Perform cluster scheduling operations.
+The local shell:
 
-Node draining and uncordoning must be handled manually.
+1. Opens an SSH connection.
+2. Sends the script through standard input.
+3. Starts Bash on the remote machine.
+4. Runs the script as root through `sudo`.
+5. Passes the command-line flags to the script.
+
+The remote node therefore does not need a local copy of the script.
+
+The executable permission on the remote script is also not required.
+
+### Remote Control-Plane Example
+
+```bash
+ssh control-plane-2 \
+    'sudo bash -s -a update -t 1.37.1 -n additional-control-plane' \
+    < kubeadm-cluster-create-update.sh
+```
+
+### Remote Upgrade with Patches
+
+If the patch directory already exists on the remote node:
+
+```bash
+ssh control-plane-2 \
+    'sudo bash -s -a update -t 1.37.1 -n additional-control-plane -p /etc/kubernetes/patches' \
+    < kubeadm-cluster-create-update.sh
+```
+
+The `-p` path refers to a directory **on the target node**, not on the machine running SSH.
 
 ---
 
-# 7. Kubernetes Version Rules
+# 12. What Happens During an Update
 
-The Kubernetes version must be provided in exact `x.y.z` format.
+The update workflow is:
+
+```text
+1. Determine installed Kubernetes version
+                 ↓
+2. Validate target version
+                 ↓
+3. Validate package availability
+                 ↓
+4. Backup /etc/kubernetes/manifests
+                 ↓
+5. Update kubeadm
+                 ↓
+6. Run kubeadm upgrade
+                 ↓
+7. Update kubelet
+                 ↓
+8. Update kubectl
+                 ↓
+9. Reload systemd
+                 ↓
+10. Restart kubelet
+                 ↓
+11. Verify installed versions
+                 ↓
+12. Administrator verifies node
+                 ↓
+13. Administrator uncordons node
+```
+
+For a primary control plane:
+
+```text
+kubeadm upgrade plan
+        ↓
+kubeadm upgrade apply
+```
+
+For an additional control plane:
+
+```text
+kubeadm upgrade node
+```
+
+For a worker:
+
+```text
+kubeadm upgrade node
+```
+
+---
+
+# 13. Kubernetes Version Rules
+
+The target version must use exact `x.y.z` format.
 
 Valid:
 
 ```text
 1.37.0
+1.37.1
+1.38.0
 ```
 
 Invalid:
@@ -377,35 +691,38 @@ v1.37.0
 latest
 ```
 
-For upgrades, the script:
+The update logic:
 
-- Does not allow downgrades.
-- Does not update to the same version.
-- Does not skip Kubernetes minor versions.
+- Rejects downgrades.
+- Rejects updating to the currently installed version.
+- Does not skip minor versions.
+- Allows patch-level updates.
 
-For example:
+Examples:
+
+```text
+1.37.0 → 1.37.1
+```
+
+Allowed.
 
 ```text
 1.36.5 → 1.37.0
 ```
 
-is supported.
-
-But:
+Allowed.
 
 ```text
 1.36.5 → 1.38.0
 ```
 
-is rejected.
-
-Minor versions must be upgraded sequentially.
+Rejected because the `1.37` minor version was skipped.
 
 ---
 
-# 8. Package Holds
+# 14. Package Holds
 
-After installation or upgrade, the following packages are held:
+After installation or upgrade, these packages are held:
 
 ```text
 kubeadm
@@ -413,11 +730,13 @@ kubelet
 kubectl
 ```
 
-This prevents them from being upgraded unintentionally by normal APT operations.
+This prevents normal APT operations from unintentionally upgrading them.
 
-The script automatically removes the holds before changing package versions and restores them afterward.
+Before changing versions, the script removes the holds.
 
-Check the holds:
+After the installation or upgrade, the script restores them.
+
+Check the current holds:
 
 ```bash
 apt-mark showhold
@@ -425,79 +744,87 @@ apt-mark showhold
 
 ---
 
-# 9. Useful Commands
+# 15. Useful Commands
 
-Check Kubernetes nodes:
+## Kubernetes Nodes
 
 ```bash
 kubectl get nodes -o wide
 ```
 
-Check all pods:
+## All Pods
 
 ```bash
 kubectl get pods -A
 ```
 
-Check Cilium:
+## Cilium
 
 ```bash
-kubectl get pods -n kube-system -l k8s-app=cilium
+kubectl get pods \
+    -n kube-system \
+    -l k8s-app=cilium
 ```
 
-Check kubelet:
+## Kubelet
 
 ```bash
 systemctl status kubelet
 ```
 
-Check Kubernetes versions:
+## Kubernetes Versions
 
 ```bash
 kubeadm version -o short
+```
+
+```bash
 kubelet --version
+```
+
+```bash
 kubectl version --client
 ```
 
-Generate a worker join command:
+## Worker Join Command
 
 ```bash
 kubeadm token create --print-join-command
 ```
 
+## Package Holds
+
+```bash
+apt-mark showhold
+```
+
 ---
 
-# Script Summary
+# 16. Script Responsibilities
 
-| Script | Purpose |
+| Script / Operation | Responsibility |
 |---|---|
 | `kubernetes.sh` | Install and upgrade Kubernetes |
 | `cilium.sh` | Install Cilium CNI |
-
-General setup order:
-
-```text
-1. Install and configure container runtime
-                 ↓
-2. Install Helm
-                 ↓
-3. Create primary control plane
-                 ↓
-4. Install Cilium
-                 ↓
-5. Add additional control planes / workers
-                 ↓
-6. Drain node before every upgrade
-                 ↓
-7. Upgrade Kubernetes
-                 ↓
-8. Verify node health
-                 ↓
-9. Uncordon node
-```
+| `kubectl drain` | Administrator |
+| `kubectl uncordon` | Administrator |
+| kubeadm patches | Administrator |
+| Kubernetes manifest backup | `kubernetes.sh` |
 
 The scripts intentionally keep these responsibilities separate:
 
-- Kubernetes lifecycle → `kubernetes.sh`
-- CNI lifecycle → `cilium.sh`
-- Node scheduling (`drain` / `uncordon`) → administrator
+```text
+Kubernetes lifecycle
+        ↓
+kubernetes.sh
+
+CNI lifecycle
+        ↓
+cilium.sh
+
+Node scheduling
+        ↓
+Administrator
+```
+
+The Kubernetes script does not install or upgrade Cilium and does not automatically drain or uncordon nodes.
