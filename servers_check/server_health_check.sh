@@ -108,42 +108,42 @@ get_ssh_hosts() {
 
 check_server() {
     local server="$1"
-
+    local ssh_config="$2"
     log_info "--- Checking Server: $server ---"
-
-    # Verify that OpenSSH can resolve the Host entry.
-    if ! ssh -G -F "$SSH_CONFIG" "$server" >/dev/null 2>&1; then
-        log_error "Could not resolve SSH configuration for host: $server"
+    # -----------------------------------------------------------------------
+    # Validate SSH configuration
+    # -----------------------------------------------------------------------
+    if ! ssh -G -F "$ssh_config" "$server" >/dev/null 2>&1; then
+        log_error "SSH configuration could not be resolved for: $server"
+        log_error "Skipping server: $server"
         return 1
     fi
-
-    # Run all health checks through one SSH connection.
+    # -----------------------------------------------------------------------
+    # Run remote health checks
     #
-    # The SSH alias is used directly. OpenSSH automatically reads:
-    #   HostName
-    #   User
-    #   IdentityFile
-    #   Port
-    #   and other SSH settings
-    #
-    if ! ssh \
+    # Connection settings:
+    #   ConnectTimeout=3       -> wait max 3 seconds for connection
+    #   ConnectionAttempts=1  -> do not retry the connection
+    #   ServerAliveInterval=2 -> check connection every 2 seconds
+    #   ServerAliveCountMax=1 -> terminate if server stops responding
+    # -----------------------------------------------------------------------
+    if ssh \
         -n \
-        -F "$SSH_CONFIG" \
-        -o ConnectTimeout=5 \
+        -F "$ssh_config" \
+        -o ConnectTimeout=3 \
+        -o ConnectionAttempts=1 \
+        -o ServerAliveInterval=2 \
+        -o ServerAliveCountMax=1 \
         "$server" << 'EOF'
-
 echo "--- System Uptime ---"
 uptime
-
 echo "--- Disk Usage (Root /) ---"
 df -h / | awk '
     NR == 2 {
         printf "Used: %s (%s/%s)\n", $5, $3, $2
     }
 '
-
 echo "--- Memory Usage ---"
-
 if command -v free >/dev/null 2>&1; then
     free -m | awk '
         NR == 2 {
@@ -152,46 +152,35 @@ if command -v free >/dev/null 2>&1; then
         }
     '
 else
-    echo "Memory information unavailable: 'free' command not found."
+    echo "Memory information unavailable: free command not found."
 fi
-
 echo "--- Security (SSH) ---"
-
-# Debian/Ubuntu usually use /var/log/auth.log.
-# Other distributions may use /var/log/secure.
-#
-# Check both locations.
 AUTH_LOG=""
-
 if [[ -f /var/log/auth.log ]]; then
     AUTH_LOG="/var/log/auth.log"
 elif [[ -f /var/log/secure ]]; then
     AUTH_LOG="/var/log/secure"
 fi
-
 if [[ -n "$AUTH_LOG" ]]; then
-
-    # grep may return exit code 1 when there are no matches.
-    # Therefore use || true so that set -e does not terminate the check.
     failed_attempts=$(
         grep -c "Failed password" "$AUTH_LOG" || true
     )
-
     echo "Auth Log: $AUTH_LOG"
     echo "Failed SSH Attempts: $failed_attempts"
-
 else
     echo "Failed SSH Attempts: authentication log not found."
 fi
-
 EOF
-
     then
-        log_error "Health check failed: $server"
-        return 1
+        log_info "--- Finished Check: $server ---"
+        return 0
     fi
-
-    log_info "--- Finished Check: $server ---"
+    # -----------------------------------------------------------------------
+    # SSH connection failed
+    # -----------------------------------------------------------------------
+    log_error "Server did not respond: $server"
+    log_error "Please check whether the server is running and SSH connectivity is available."
+    return 1
 }
 
 # ---------------------------------------------------------------------------
@@ -255,7 +244,11 @@ main() {
     # Extract Hosts
     # -----------------------------------------------------------------------
 
-    mapfile -t servers < <(get_ssh_hosts "$ssh_config")
+    servers=()
+
+    while IFS= read -r server; do
+        [[ -n "$server" ]] && servers+=("$server")
+    done < <(get_ssh_hosts "$ssh_config")
 
     if [[ ${#servers[@]} -eq 0 ]]; then
         log_error "No valid SSH hosts found in: $ssh_config"
@@ -273,10 +266,11 @@ main() {
 
     for server in "${servers[@]}"; do
 
-        if ! check_server "$server"; then
+        if ! check_server "$server" "$ssh_config"; then
             ((failed_servers++))
             log_error "Server check failed: $server"
-        fi
+
+        fi  
 
         echo
 
